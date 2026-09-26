@@ -2,7 +2,10 @@
 
 from pathlib import Path
 import unittest
+import threading
+from unittest.mock import Mock
 
+from nohands.audio import AudioIO
 from nohands.codex import event_agent_message, event_thread_id, parse_event
 from nohands.config import load_settings, write_default_config
 from nohands.service import classify_control, spoken_excerpt
@@ -29,6 +32,20 @@ class CoreTests(unittest.TestCase):
     def test_spoken_excerpt_removes_markdown_and_caps_length(self):
         self.assertEqual(spoken_excerpt("## Done\n\n`pytest` passed."), "Done pytest passed.")
         self.assertLessEqual(len(spoken_excerpt("word " * 300)), 421)
+
+    def test_streaming_transcript_is_dispatched_only_when_capture_stops(self):
+        audio = AudioIO.__new__(AudioIO)
+        audio._lock = threading.Lock()
+        audio._mic = Mock()
+        audio._callback = Mock()
+        audio._listening = False
+        audio._pending_text = ""
+        audio.start_listening()
+        audio._on_line(type("Line", (), {"text": "Fix the tests"})())
+        audio._on_line(type("Line", (), {"text": "Fix the tests and lint"})())
+        audio._callback.assert_not_called()
+        audio.stop_listening()
+        audio._callback.assert_called_once_with("Fix the tests and lint")
 
     def test_settings_and_workspace_state_are_local(self):
         from tempfile import TemporaryDirectory

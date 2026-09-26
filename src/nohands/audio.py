@@ -31,6 +31,7 @@ class AudioIO:
         self._mic.on_line(self._on_line)
         self._loaded = False
         self._listening = False
+        self._pending_text = ""
         self._lock = threading.Lock()
 
     def load(self) -> None:
@@ -53,15 +54,27 @@ class AudioIO:
         with self._lock:
             if self._listening:
                 return
-            self._mic.start()
+            self._pending_text = ""
             self._listening = True
+        try:
+            self._mic.start()
+        except Exception:
+            with self._lock:
+                self._listening = False
+            raise
 
     def stop_listening(self) -> None:
         with self._lock:
             if not self._listening:
                 return
-            self._mic.stop()
+        self._mic.stop()
+        with self._lock:
             self._listening = False
+            transcript = self._pending_text.strip()
+            self._pending_text = ""
+        callback = self._callback
+        if transcript and callback:
+            callback(transcript)
 
     def say(self, text: str) -> None:
         if not self._speech_enabled or not text.strip():
@@ -88,6 +101,14 @@ class AudioIO:
 
     def _on_line(self, line: object) -> None:
         text = getattr(line, "text", "")
-        callback = self._callback
-        if self._listening and callback and isinstance(text, str) and text.strip():
-            callback(text.strip())
+        if not isinstance(text, str) or not text.strip():
+            return
+        with self._lock:
+            if not self._listening:
+                return
+            cleaned = text.strip()
+            # Streaming recognizers may revise the current utterance in place.
+            if cleaned.startswith(self._pending_text):
+                self._pending_text = cleaned
+            elif not self._pending_text.startswith(cleaned):
+                self._pending_text = f"{self._pending_text} {cleaned}".strip()
